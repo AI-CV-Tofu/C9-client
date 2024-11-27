@@ -7,11 +7,12 @@ import plotly.express as px
 import pandas as pd
 import tempfile
 import time
-from utils import fetch_data_from_api
+from utils import fetch_data_stream, fetch_data_from_api
 import requests
 import base64
 import tempfile
 import os
+import threading
 
 url = "http://44.214.252.225:8000/process-image/"
 
@@ -102,6 +103,10 @@ def process_video(uploaded_file):
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
     return cap, fps, total_frames
+    
+def start_stream():
+    url = "http://44.214.252.225:8000/dashboard_stream"
+    threading.Thread(target=fetch_data_stream, args=(url,), daemon=True).start()
 
 
 # 페이지 선택 사이드바 생성
@@ -190,24 +195,14 @@ if choice == "메인 화면":  # 메뉴 선택 조건
                                 annotated_frame = detected_frame.copy()
                                 image_height, image_width, _ = annotated_frame.shape
                                 model_height, model_width = 640, 640
-                                
                                 x_ratio = image_width / model_width
                                 y_ratio = image_height / model_height
-                                
-                                # SageMaker 모델로 전달한 크기
-                                model_width, model_height = 640, 640
-                                
-                                # Streamlit 표시용 리사이즈 크기
-                                resized_height, resized_width = 400, 400
                                 
                                 # 박스 좌표 변환
                                 for defect in defects:
                                     if defect.get("box"):
                                         x1, y1, x2, y2 = map(int, defect["box"])
                                         
-                                        # 모델 크기 기준으로 스케일 변환
-                                        # 박스 좌표 변환
-                                        scale_factor = 400 / 640  # 크기 축소 비율
                                         x1, x2 = int(x_ratio * x1), int(x_ratio * x2)
                                         y1, y2 = int(y_ratio * y1), int(y_ratio * y2)
                                         
@@ -216,11 +211,6 @@ if choice == "메인 화면":  # 메뉴 선택 조건
 
                                         cv2.putText(annotated_frame, defect["type"], (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
 
-
-                                        
-                                        # 변환된 박스를 사용해 그림
-                                        cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                                        cv2.putText(annotated_frame, defect["type"], (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
                                 # 상태 메시지 업데이트
                                 if defect_status == "NG":
                                     status_placeholder.warning(f"현재 두부 상태: NG (결함 발견)")
@@ -263,13 +253,12 @@ if choice == "메인 화면":  # 메뉴 선택 조건
             if temp_file_path and os.path.exists(temp_file_path):
                 os.unlink(temp_file_path)
 
-
-
-
+    
 # 대시보드
 elif choice == "대시보드":
-    api_data = fetch_data_from_api()
-    # print(api_data)
+    start_stream()
+    api_data = st.session_state.get('dashboard_data', fetch_data_from_api())
+    
     st.markdown(
         """
         <style>
@@ -301,7 +290,7 @@ elif choice == "대시보드":
         with st.expander("공장 1 NG 목록 (비율)"):
             ng_data1 = pd.DataFrame({
                 "클래스": ["선자국", "이물질", "잔재", "패임", "절단면", "모서리 깨짐", "기포"],
-                "비율 (%)": [30, 20, 15, 10, 10, 10, 5]
+                "비율 (%)": api_data['data']['bar_chart']['counts']
             })
             fig_ng1 = px.bar(ng_data1, x="비율 (%)", y="클래스", orientation="h", title="공장 1 NG 검출 비율")
             fig_ng1.update_layout(
