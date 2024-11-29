@@ -12,13 +12,12 @@ import requests
 import base64
 import os
 
-
+url = "http://44.214.252.225:8000/process-image/"
 
 def send_image_as_numpy_array(image):
     """
     이미지를 numpy 배열로 변환하여 서버로 전송
     """
-    url = "http://44.214.252.225:8000/process-image/"
     try:
         # 이미지를 numpy 배열로 변환
         image_array = image.astype(np.uint8).tolist()
@@ -62,8 +61,6 @@ def apply_tint(image, status):
 
     return output
 
-
-
 def is_tofu_fully_visible(frame, x, y, w, h):
     """두부 완전 검출 조건 확인"""
     height, width, _ = frame.shape
@@ -103,7 +100,6 @@ def process_video(uploaded_file):
 
     return cap, fps, total_frames
 
-
 # 페이지 선택 사이드바 생성
 with st.sidebar:
     choice = option_menu("Menu", ["메인 화면", "대시보드"],
@@ -117,23 +113,11 @@ with st.sidebar:
                          })
 
 # 메인 화면
-if choice == "메인 화면":  # 메뉴 선택 조건
+if choice == "메인 화면":
     with st.sidebar:
         uploaded_file = st.file_uploader("영상을 업로드하세요", type=["mp4", "avi", "mov"])
-    st.markdown(
-        """
-        <style>
-        div.block-container {
-            max-width: 90%;  /* 대시보드 너비 설정 */
-        }
-        div[data-testid="stHorizontalBlock"] > div:nth-child(2) {
-        margin-left: -270px; /* col2만 왼쪽으로 이동 */
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-    st.title("두부 결함 검출")
+
+    st.title("메인 화면")
 
     # 넓은 화면 레이아웃 설정
     col1, col2 = st.columns([2, 1])
@@ -145,7 +129,6 @@ if choice == "메인 화면":  # 메뉴 선택 조건
     
     status_placeholder = col2.empty()
     defect_info_placeholder = col2.empty()
-    
 
     # 영상 미 업로드 시 기본 UI 표시
     light_green_color = (169, 209, 150)  # RGB 값
@@ -190,49 +173,30 @@ if choice == "메인 화면":  # 메뉴 선택 조건
                     )
     
                     # 두부 검출 및 서버로 데이터 전송
-                    # 서버로부터 응답 처리
                     if detected_frame is not None:
                         response = send_image_as_numpy_array(detected_frame)
                         if response:
                             if response.get("status") == "success":
                                 defect_status = response["results"]["defect_status"]
-                                defects = response["results"].get("defects", [])  # 결함 리스트
+                                defects = response["results"].get("defects", [])
                     
                                 # 결함 영역 박스 그리기
                                 annotated_frame = detected_frame.copy()
                                 image_height, image_width, _ = annotated_frame.shape
                                 model_height, model_width = 640, 640
-                                
                                 x_ratio = image_width / model_width
                                 y_ratio = image_height / model_height
                                 
-                                # SageMaker 모델로 전달한 크기
-                                model_width, model_height = 640, 640
-                                
-                                # Streamlit 표시용 리사이즈 크기
-                                resized_height, resized_width = 400, 400
-                                
-                                # 박스 좌표 변환
                                 for defect in defects:
                                     if defect.get("box"):
                                         x1, y1, x2, y2 = map(int, defect["box"])
                                         
-                                        # 모델 크기 기준으로 스케일 변환
-                                        # 박스 좌표 변환
-                                        scale_factor = 400 / 640  # 크기 축소 비율
                                         x1, x2 = int(x_ratio * x1), int(x_ratio * x2)
                                         y1, y2 = int(y_ratio * y1), int(y_ratio * y2)
                                         
-                                        # 변환된 박스를 사용해 그림
-                                        cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-
-                                        cv2.putText(annotated_frame, defect["type"], (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
-
-
-                                        
-                                        # 변환된 박스를 사용해 그림
                                         cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
                                         cv2.putText(annotated_frame, defect["type"], (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+
                                 # 상태 메시지 업데이트
                                 if defect_status == "NG":
                                     status_placeholder.warning(f"현재 두부 상태: NG (결함 발견)")
@@ -246,20 +210,16 @@ if choice == "메인 화면":  # 메뉴 선택 조건
                                     caption="현재 두부 이미지 (결함 표시)",
                                     width=400
                                 )
-                                # **실시간 결함 클래스 및 개수 업데이트**
-                               # **결함 클래스 및 개수 실시간 업데이트**
+
+                                # 결함 정보 업데이트
                                 with defect_info_placeholder:
                                     if defects:
-                                        # 결함 클래스별 개수 계산
                                         defect_classes = [defect["type"] for defect in defects]
                                         defect_counts = {cls: defect_classes.count(cls) for cls in set(defect_classes)}
-                                
-                                        # 한곳에 모든 결함 클래스 표시
                                         summary = "\n>".join([f"{cls}: {count}개" for cls, count in defect_counts.items()])
-                                        st.info(summary)  # 요약 정보 표시
+                                        st.info(summary)
                                     else:
-                                        st.info("결함 없음")  # 결함 없음을 명확히 표시
-
+                                        st.info("결함 없음")
 
                             else:
                                 status_placeholder.error(f"서버 에러: {response}")
@@ -275,127 +235,166 @@ if choice == "메인 화면":  # 메뉴 선택 조건
             if temp_file_path and os.path.exists(temp_file_path):
                 os.unlink(temp_file_path)
 
-
-
-
 # 대시보드
 elif choice == "대시보드":
-    api_data = fetch_data_from_api()
-    # print(api_data)
     st.markdown(
         """
         <style>
         div.block-container {
-            max-width: 90%;  /* 대시보드 너비 설정 */
+            max-width: 90%;
         }
         </style>
         """,
         unsafe_allow_html=True,
     )
-    st.title("대시보드")
+    # st.title("대시보드")
+    
+    # 플레이스홀더 생성
+    dashboard_placeholder = st.empty()
+    
+    while True:
+        # 현재 타임스탬프를 key에 포함하여 고유성 보장
+        current_time = int(time.time())
+        
+        with dashboard_placeholder.container():
+            # 대시보드 데이터 가져오기
+            api_data = fetch_data_from_api()
 
-    # 상단 3개의 원형 차트 영역
-    col1, col2, col3 = st.columns(3)
+            # 전체를 1:1 비율로 나누기
+            col1, col2 = st.columns([2, 3])  # 왼쪽과 오른쪽을 1:1로 나누기
+            
+            # 왼쪽 열: 3개의 원형 차트와 Expander
+            with col1:
+                # 왼쪽을 다시 3개의 열로 나누기
+                sub_col1, sub_col2, sub_col3 = st.columns(3)
+            
+                with sub_col1:
+                    # 공장 1
+                    st.subheader("공장 1")
+                    fig1 = px.pie(
+                        values=api_data['data']['pie_chart'], 
+                        names=["OK", "NG"], 
+                        hole=0.4,
+                        color=["OK", "NG"],
+                        color_discrete_map={"OK": "lightblue", "NG": "blue"},
+                        height=250
+                    )
+                    fig1.update_traces(hovertemplate="")
+                    st.plotly_chart(fig1, use_container_width=True, key=f"pie1_{current_time}")
+            
+                    with st.expander("공장 1 NG 목록 (비율)"):
+                        ng_data1 = pd.DataFrame({
+                            "클래스": ["기포", "모서리 깨짐", "절단면", "잔재", "패임", "선자국", "이물질"],
+                            "비율 (%)": api_data['data']['bar_chart']['counts']
+                        })
+                        
+                        fig_ng1 = px.bar(ng_data1, x="비율 (%)", y="클래스", orientation="h", title="공장 1 NG 검출 비율")
+                        
+                        # 막대 간 간격 좁히기
+                        fig_ng1.update_layout(
+                            yaxis_title="",
+                            yaxis=dict(
+                                tickfont=dict(size=12),
+                                automargin=True
+                            ),
+                            margin=dict(l=70, r=20, t=30, b=20),
+                            bargap=0.1,           # 막대 간 간격 좁히기
+                            bargroupgap=0.1,      # 그룹화된 막대 간 간격 좁히기
+                            height=300            # 차트 높이 조정 (여기서 막대가 차지하는 높이도 줄어듦)
+                        )
+                        
+                        st.plotly_chart(fig_ng1, use_container_width=True, key=f"bar1_{current_time}")
+            
+                with sub_col2:
+                    # 공장 2
+                    st.subheader("공장 2")
+                    fig2 = px.pie(
+                        values=[70, 30], 
+                        names=["OK", "NG"], 
+                        hole=0.4,
+                        color=["OK", "NG"],
+                        color_discrete_map={"OK": "lightblue", "NG": "blue"},
+                        height=250
+                    )
+                    fig2.update_traces(hovertemplate="")
+                    st.plotly_chart(fig2, use_container_width=True, key=f"pie2_{current_time}")
+            
+                    with st.expander("공장 2 NG 목록 (비율)"):
+                        ng_data2 = pd.DataFrame({
+                            "클래스": ["기포", "모서리 깨짐", "절단면", "잔재", "패임", "선자국", "이물질"],
+                            "비율 (%)": [25, 25, 20, 15, 5, 5, 5]
+                        })
+                        
+                        fig_ng2 = px.bar(ng_data2, x="비율 (%)", y="클래스", orientation="h", title="공장 2 NG 검출 비율")
+                        
+                        # 막대 간 간격 좁히기 및 차트 높이 조정
+                        fig_ng2.update_layout(
+                            yaxis_title="",
+                            yaxis=dict(
+                                tickfont=dict(size=12),
+                                automargin=True
+                            ),
+                            margin=dict(l=70, r=20, t=30, b=20),
+                            bargap=0.1,           # 막대 간 간격 좁히기
+                            bargroupgap=0.1,      # 그룹화된 막대 간 간격 좁히기
+                            height=300            # 차트 높이 조정 (여기서 막대가 차지하는 높이도 줄어듦)
+                        )
+                        
+                        st.plotly_chart(fig_ng2, use_container_width=True, key=f"bar2_{current_time}")
 
-    with col1:
-        st.subheader("공장 1")
-        fig1 = px.pie(
-            values=api_data['data']['pie_chart'], 
-            names=["OK", "NG"], 
-            hole=0.4,
-            color=["OK", "NG"],
-            color_discrete_map={"OK": "lightblue", "NG": "pink"}
-            )
-        fig1.update_traces(hovertemplate="")
-        st.plotly_chart(fig1, use_container_width=True)
+            
+                with sub_col3:
+                    # 공장 3
+                    st.subheader("공장 3")
+                    fig3 = px.pie(
+                        values=[60, 40], 
+                        names=["OK", "NG"], 
+                        hole=0.4,
+                        color=["OK", "NG"],
+                        color_discrete_map={"OK": "lightblue", "NG": "blue"},
+                        height=250
+                    )
+                    fig3.update_traces(hovertemplate="")
+                    st.plotly_chart(fig3, theme="streamlit", use_container_width=True, key=f"pie3_{current_time}")
+            
+                    with st.expander("공장 3 NG 목록 (비율)"):
+                        ng_data3 = pd.DataFrame({
+                            "클래스": ["기포", "모서리 깨짐", "절단면", "잔재", "패임", "선자국", "이물질"],
+                            "비율 (%)": [40, 20, 10, 10, 10, 5, 5]
+                        })
+                        
+                        fig_ng3 = px.bar(ng_data3, x="비율 (%)", y="클래스", orientation="h", title="공장 3 NG 검출 비율")
+                        
+                        # 막대 간 간격 좁히기 및 차트 높이 조정
+                        fig_ng3.update_layout(
+                            yaxis_title="",
+                            yaxis=dict(
+                                tickfont=dict(size=12),
+                                automargin=True
+                            ),
+                            margin=dict(l=70, r=20, t=30, b=20),
+                            bargap=0.1,           # 막대 간 간격 좁히기
+                            bargroupgap=0.1,      # 그룹화된 막대 간 간격 좁히기
+                            height=300            # 차트 높이 조정 (여기서 막대가 차지하는 높이도 줄어듦)
+                        )
+                        
+                        st.plotly_chart(fig_ng3, use_container_width=True, key=f"bar3_{current_time}")
 
-        # Expander - 공장 1 NG 목록 (비율)
-        with st.expander("공장 1 NG 목록 (비율)"):
-            ng_data1 = pd.DataFrame({
-                "클래스": ["선자국", "이물질", "잔재", "패임", "절단면", "모서리 깨짐", "기포"],
-                "비율 (%)": [30, 20, 15, 10, 10, 10, 5]
-            })
-            fig_ng1 = px.bar(ng_data1, x="비율 (%)", y="클래스", orientation="h", title="공장 1 NG 검출 비율")
-            fig_ng1.update_layout(
-                yaxis_title="",  # y축 레이블 제거
-                yaxis=dict(
-                    tickfont=dict(size=12),  # y축 폰트 크기 유지
-                    automargin=True  # y축 자동 마진 활성화
-                ),
-                margin=dict(l=70, r=20, t=30, b=20)  # 마진 설정
-            )
-            st.plotly_chart(fig_ng1, use_container_width=True)
+            
+            # 오른쪽 열: 실시간 그래프
+            with col2:
+                st.subheader("실시간 그래프")
+                # 데이터 생성
+                data = pd.DataFrame({
+                    "시간": api_data['data']['line_chart']['timestamp'],
+                    "OK": api_data['data']['line_chart']['OK'],
+                    "NG": api_data['data']['line_chart']['NG']
+                })
+            
+                # 선 그래프
+                fig_line = px.line(data, x="시간", y=["OK", "NG"], markers=True, title="시간대별 검출 현황", color_discrete_map={"OK": "lightblue", "NG": "blue"})
+                st.plotly_chart(fig_line, use_container_width=True, key=f"line_{current_time}")
 
-    with col2:
-        st.subheader("공장 2")
-        fig2 = px.pie(
-            values=[70, 30], 
-            names=["OK", "NG"], 
-            hole=0.4,
-            color=["OK", "NG"],
-            color_discrete_map={"OK": "lightblue", "NG": "pink"}
-            )
-        fig2.update_traces(hovertemplate="")
-        st.plotly_chart(fig2, use_container_width=True)
 
-        # Expander - 공장 2 NG 목록 (비율)
-        with st.expander("공장 2 NG 목록 (비율)"):
-            ng_data2 = pd.DataFrame({
-                "클래스": ["선자국", "이물질", "잔재", "패임", "절단면", "모서리 깨짐", "기포"],
-                "비율 (%)": [25, 25, 20, 15, 5, 5, 5]
-            })
-            fig_ng2 = px.bar(ng_data2, x="비율 (%)", y="클래스", orientation="h", title="공장 2 NG 검출 비율")
-            fig_ng2.update_layout(
-                yaxis_title="",
-                yaxis=dict(
-                    tickfont=dict(size=12),
-                    automargin=True
-                ),
-                margin=dict(l=70, r=20, t=30, b=20)
-            )
-            st.plotly_chart(fig_ng2, use_container_width=True)
-
-    with col3:
-        st.subheader("공장 3")
-        fig3 = px.pie(
-            values=[60, 40], 
-            names=["OK", "NG"], 
-            hole=0.4,
-            color=["OK", "NG"],
-            color_discrete_map={"OK": "lightblue", "NG": "pink"}
-            )
-        fig3.update_traces(hovertemplate="")
-        st.plotly_chart(fig3, theme="streamlit", use_container_width=True)
-
-        # Expander - 공장 3 NG 목록 (비율)
-        with st.expander("공장 3 NG 목록 (비율)"):
-            ng_data3 = pd.DataFrame({
-                "클래스": ["선자국", "이물질", "잔재", "패임", "절단면", "모서리 깨짐", "기포"],
-                "비율 (%)": [40, 20, 10, 10, 10, 5, 5]
-            })
-            fig_ng3 = px.bar(ng_data3, x="비율 (%)", y="클래스", orientation="h", title="공장 3 NG 검출 비율")
-            fig_ng3.update_layout(
-                yaxis_title="",
-                yaxis=dict(
-                    tickfont=dict(size=12),
-                    automargin=True
-                ),
-                margin=dict(l=70, r=20, t=30, b=20)
-            )
-            st.plotly_chart(fig_ng3, use_container_width=True)
-
-    # 실시간 그래프 영역
-    st.subheader("실시간 그래프")
-    st.write("→ 시간대별 검출 현황 (선 그래프 / 막대 그래프)")
-
-    # 예시 데이터 생성
-    data = pd.DataFrame({
-        "시간": api_data['data']['line_chart']['timestamp'],
-        "OK": api_data['data']['line_chart']['OK'],
-        "NG": api_data['data']['line_chart']['NG']
-    })
-
-    # 선 그래프 예제
-    fig_line = px.line(data, x="시간", y=["OK", "NG"], markers=True, title="시간대별 검출 현황")
-    st.plotly_chart(fig_line, use_container_width=True)
-
+        # 1초 대기
+        time.sleep(1)

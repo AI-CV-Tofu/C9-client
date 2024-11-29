@@ -5,7 +5,58 @@ from math import sqrt
 from streamlit_option_menu import option_menu
 import plotly.express as px
 import pandas as pd
+import tempfile
 import time
+from utils import fetch_data_from_api
+import queue
+import threading
+import requests
+import os
+
+# 세션 상태 초기화
+if "video_processing_queue" not in st.session_state:
+    st.session_state.video_processing_queue = queue.Queue()
+
+if "result_queue" not in st.session_state:
+    st.session_state.result_queue = queue.Queue()
+
+if "processing_thread" not in st.session_state:
+    st.session_state.processing_thread = None
+
+
+def send_image_as_numpy_array(image):
+    """
+    이미지를 numpy 배열로 변환하여 서버로 전송
+    """
+    url = "http://44.214.252.225:8000/process-image/"
+    try:
+        image_array = image.astype(np.uint8).tolist()
+        response = requests.post(
+            url,
+            json={"image": image_array},
+            headers={"Content-Type": "application/json"}
+        )
+        if response.status_code == 200:
+            return response.json()
+        else:
+            return None
+    except Exception as e:
+        print(f"Error: {e}")
+        return None
+
+
+def apply_tint(image, status):
+    """
+    이미지에 상태에 따라 색상 적용
+    """
+    overlay = image.copy()
+    output = image.copy()
+
+    tint_color = (0, 255, 0) if status == "OK" else (0, 0, 255)
+    alpha = 0.1
+    cv2.rectangle(overlay, (0, 0), (image.shape[1], image.shape[0]), tint_color, -1)
+    cv2.addWeighted(overlay, alpha, output, 1 - alpha, 0, output)
+    return output
 
 
 def is_tofu_fully_visible(frame, x, y, w, h):
@@ -35,14 +86,89 @@ def detect_best_tofu_frame(frame, frame_center):
             distance_to_center = sqrt((tofu_center[0] - frame_center[0])**2 + (tofu_center[1] - frame_center[1])**2)
             if distance_to_center < frame.shape[1] * 0.05:  # 중앙 근접 조건
                 return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-
     return None
+
+
+def video_processing_task(uploaded_file, result_queue):
+    """
+    동영상 처리 작업 실행 (백그라운드)
+    """
+    try:
+        temp_file_path = None
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as temp_file:
+            temp_file.write(uploaded_file.read())
+            temp_file_path = temp_file.name
+
+        cap = cv2.VideoCapture(temp_file_path)
+        if not cap.isOpened():
+            result_queue.put({"error": "동영상을 열 수 없습니다."})
+            return
+
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+        for frame_idx in range(total_frames):
+            ret, frame = cap.read()
+            if not ret:
+                break
+
+            frame_resized = cv2.resize(frame, (640, 640))
+            frame_center = (frame_resized.shape[1] // 2, frame_resized.shape[0] // 2)
+            detected_frame = detect_best_tofu_frame(frame_resized, frame_center)
+
+            result_queue.put({
+                "frame_idx": frame_idx + 1,
+                "total_frames": total_frames,
+                "frame": detected_frame if detected_frame is not None else frame_resized,
+            })
+
+        cap.release()
+
+    except Exception as e:
+        result_queue.put({"error": str(e)})
+    finally:
+        if temp_file_path and os.path.exists(temp_file_path):
+            os.unlink(temp_file_path)
+
+
+def start_video_processing(uploaded_file):
+    """
+    동영상 처리 시작
+    """
+    if st.session_state.processing_thread is not None and st.session_state.processing_thread.is_alive():
+        st.info("이미 동영상 처리가 진행 중입니다.")
+        return
+
+    if uploaded_file:
+        st.session_state.processing_thread = threading.Thread(
+            target=video_processing_task,
+            args=(uploaded_file, st.session_state.result_queue),
+            daemon=True
+        )
+        st.session_state.processing_thread.start()
+        st.success("동영상 처리가 시작되었습니다.")
+
+
+def display_video_processing_ui():
+    """
+    동영상 처리 결과 표시
+    """
+    while not st.session_state.result_queue.empty():
+        result = st.session_state.result_queue.get()
+        if "error" in result:
+            st.error(result["error"])
+        else:
+            video_placeholder.image(
+                cv2.cvtColor(result["frame"], cv2.COLOR_BGR2RGB),
+                caption=f"프레임 {result['frame_idx']}/{result['total_frames']}",
+                width=400,
+            )
 
 
 # 페이지 선택 사이드바 생성
 with st.sidebar:
-    choice = option_menu("Menu", ["메인 화면", "대시보드", "과거 기록"],
-                         icons=['house', 'bi bi-clipboard2-data', 'bi bi-clock-history'],
+    choice = option_menu("Menu", ["메인 화면", "대시보드"],
+                         icons=['house', 'bi bi-clipboard2-data'],
                          menu_icon="app-indicator", default_index=0,
                          styles={
                              "container": {"padding": "4!important"},
@@ -52,73 +178,53 @@ with st.sidebar:
                          })
 
 # 메인 화면
-if choice == "메인 화면":
-    st.title("메인 화면")
+if choice == "메인 화면":  # 메뉴 선택 조건
+    with st.sidebar:
+        uploaded_file = st.file_uploader("영상을 업로드하세요", type=["mp4", "avi", "mov"])
+    st.markdown(
+        """
+        <style>
+        div.block-container {
+            max-width: 90%;  /* 대시보드 너비 설정 */
+        }
+        div[data-testid="stHorizontalBlock"] > div:nth-child(2) {
+        margin-left: -270px; /* col2만 왼쪽으로 이동 */
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.title("두부 결함 검출")
 
-    # Cloud9에 저장된 파일 경로
-    video_file_path = "test.mp4"
+    # 넓은 화면 레이아웃 설정
+    col1, col2 = st.columns([2, 1])
+    # 기본 UI 초기화
+    col1.write("영상")
+    video_placeholder = col1.empty()  # 비디오 자리
+    col2.write("현재 두부 사진")
+    tofu_image_placeholder = col2.empty()  # 두부 이미지 자리
+    
+    status_placeholder = col2.empty()
+    defect_info_placeholder = col2.empty()
+    
 
-    # 동영상 열기
-    cap = cv2.VideoCapture(video_file_path)
-    if not cap.isOpened():
-        st.error(f"동영상을 열 수 없습니다: {video_file_path}")
-    else:
-        # 동영상 정보 가져오기
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    # 영상 미 업로드 시 기본 UI 표시
+    light_green_color = (169, 209, 150)  # RGB 값
+    default_image = np.full((400, 400, 3), light_green_color, dtype=np.uint8)
 
-        # 넓은 화면을 활용한 레이아웃 설정
-        col1, col2 = st.columns([2, 1])
-        col3, col4, col5 = st.columns([1, 1, 1])
+    video_placeholder.image(default_image, caption="영상 없음", width=400)
+    tofu_image_placeholder.image(default_image, caption="두부 이미지 없음", width=400)
 
-        col1.write("영상")
-        video_placeholder = col1.empty()
-        col2.write("현재 두부 사진")
-        tofu_image_placeholder = col2.empty()
+    if uploaded_file:
+        start_video_processing(uploaded_file)
+    display_video_processing_ui()
 
-        col3.write("통계")
-        stat_chart = col3.empty()
-        col4.write("결함 위치 크롭")
-        col5.write("결함 안내")
 
-        # 초기값 설정
-        last_detection_time = -1
-        central_frame_image = None
-
-        # 프레임 처리
-        fps = min(fps, 30)  # FPS를 최대 30으로 제한
-        for frame_idx in range(total_frames):
-            ret, frame = cap.read()
-            if not ret:
-                break
-
-            current_time = frame_idx / fps
-            resized_frame = cv2.resize(frame, (300, 300))  # 해상도를 300x300으로 축소
-            frame_rgb = cv2.cvtColor(resized_frame, cv2.COLOR_BGR2RGB)
-            video_placeholder.image(frame_rgb, caption="영상 프레임", use_container_width=True)
-
-            frame_center = (resized_frame.shape[1] / 2, resized_frame.shape[0] / 2)
-
-            # 두부 검출
-            detected_frame = detect_best_tofu_frame(resized_frame, frame_center)
-
-            # 결함 통계 표시 (예시 데이터)
-            stat_chart.bar_chart({"불량": [5], "OK": [20]})
-
-            # 두부 검출 결과 표시
-            if detected_frame is not None and (current_time - last_detection_time > 1):
-                central_frame_image = detected_frame
-                tofu_image_placeholder.image(
-                    detected_frame, caption=f"새로운 두부 검출됨 (Time: {current_time:.2f}s)", width=300
-                )
-                last_detection_time = current_time
-
-            time.sleep(1 / fps)
-
-        cap.release()
 
 # 대시보드
 elif choice == "대시보드":
+    api_data = fetch_data_from_api()
+    # print(api_data)
     st.markdown(
         """
         <style>
@@ -137,7 +243,7 @@ elif choice == "대시보드":
     with col1:
         st.subheader("공장 1")
         fig1 = px.pie(
-            values=[43, 10], 
+            values=api_data['data']['pie_chart'], 
             names=["OK", "NG"], 
             hole=0.4,
             color=["OK", "NG"],
@@ -227,16 +333,12 @@ elif choice == "대시보드":
 
     # 예시 데이터 생성
     data = pd.DataFrame({
-        "시간": ["10:00", "10:10", "10:20", "10:30", "10:40"],
-        "OK": [10, 15, 20, 25, 30],
-        "NG": [5, 7, 3, 8, 6]
+        "시간": api_data['data']['line_chart']['timestamp'],
+        "OK": api_data['data']['line_chart']['OK'],
+        "NG": api_data['data']['line_chart']['NG']
     })
 
     # 선 그래프 예제
     fig_line = px.line(data, x="시간", y=["OK", "NG"], markers=True, title="시간대별 검출 현황")
     st.plotly_chart(fig_line, use_container_width=True)
 
-# 과거 기록
-elif choice == "과거 기록":
-    st.title("과거 기록")
-    st.write("과거 기록 내용을 여기에 추가하세요.")
